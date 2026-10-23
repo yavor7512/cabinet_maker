@@ -1,0 +1,32 @@
+// Compatibility names only: dimensions and relationships stay in the design.
+// An explicit alias override updates every listed parameter. Without an
+// override, instances retain their own defaults, even when they differ.
+{
+  WALL_THICKNESS_MM: ['upper_wall', 'lower_wall'],
+  BOTTOM_THICKNESS_MM: ['upper_bottom_thickness', 'lower_bottom_thickness'],
+  DADO_DEPTH_MM: ['upper_dado', 'lower_dado'],
+  BOTTOM_OFFSET_MM: ['upper_bottom_offset', 'lower_bottom_offset'],
+  DADO_CLEARANCE_MM: ['upper_dado_clearance', 'lower_dado_clearance'],
+  BOX_WIDTH_MM: ['upper_width', 'lower_width'],
+  BOX_DEPTH_MM: ['upper_depth', 'lower_depth'],
+  UPPER_HEIGHT_MM: ['upper_height'], LOWER_HEIGHT_MM: ['lower_height'],
+  UPPER_POSITION_X_MM: ['upper_x'], UPPER_POSITION_Y_MM: ['upper_y'], UPPER_POSITION_Z_MM: ['upper_z'],
+  LOWER_POSITION_X_MM: ['lower_x'], LOWER_POSITION_Y_MM: ['lower_y'], LOWER_POSITION_Z_MM: ['lower_z'],
+  FACE_WIDTH_MM: ['lower_face_x'], FACE_THICKNESS_MM: ['lower_face_y'], FACE_HEIGHT_MM: ['lower_face_z'],
+  FACE_TOP_Z_MM: ['lower_face_top_z'],
+  FACE_OFFSET_X_MM: ['lower_face_offset_x'], FACE_OFFSET_Y_MM: ['lower_face_offset_y'],
+  OPENING_WIDTH_MM: ['carcass_opening_width'], OPENING_HEIGHT_MM: ['carcass_opening_height'],
+  CABINET_DEPTH_MM: ['carcass_depth'], CARCASS_THICKNESS_MM: ['carcass_stock'],
+  STILE_WIDTH_MM: ['carcass_stile_width'], STILE_THICKNESS_MM: ['carcass_stile_thickness'],
+  FRAME_FRONT_Y_MM: ['carcass_y'], CARCASS_POSITION_X_MM: ['carcass_x'], CARCASS_POSITION_Z_MM: ['carcass_z'],
+  SCREWS_PER_CORNER: ['upper_screw_count', 'lower_screw_count'],
+  SCREW_LOWER_MM: ['upper_screw_lower', 'lower_screw_lower'], SCREW_UPPER_MM: ['upper_screw_upper', 'lower_screw_upper'],
+  SCREW_SPACING_MM: ['upper_screw_spacing', 'lower_screw_spacing'],
+  POCKET_ANGLE_DEG: ['upper_pocket_angle', 'lower_pocket_angle'],
+  SCREW_LENGTH_MM: ['drawer_screw_length'], SCREW_DIAMETER_MM: ['drawer_screw_diameter'],
+  HEAD_DIAMETER_MM: ['drawer_screw_head_diameter'], HEAD_HEIGHT_MM: ['drawer_screw_head_height'],
+  TIP_LENGTH_MM: ['drawer_screw_tip_length'], POCKET_DIAMETER_MM: ['drawer_screw_pocket_diameter'],
+  SEAT_DISTANCE_MM: ['drawer_screw_seat_distance'], POCKET_CLEARANCE_MM: ['drawer_screw_edge_clearance'],
+  SCREW_TIP_CLEARANCE_MM: ['drawer_screw_tip_clearance'],
+  UPPER_BOARD_START: ['upper_board_start'], LOWER_BOARD_START: ['lower_board_start'], CARCASS_BOARD_START: ['carcass_board_start'],
+}

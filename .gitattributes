@@ -1,0 +1,3 @@
+# Preserve exported artifacts byte for byte across checkouts.
+*.pdf binary
+*.step -text
