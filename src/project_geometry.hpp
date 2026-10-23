@@ -1,6 +1,7 @@
 #pragma once
 #include "geometry.hpp"
 #include "design.hpp"
+#include "temporary_step.hpp"
 #include <BRepExtrema_DistShapeShape.hxx>
 
 namespace design {
@@ -10,6 +11,15 @@ inline TopoDS_Shape boxShape(const Box& b) {
 struct Generated {
   std::vector<TopoDS_Shape> parts;
   std::vector<std::string> names;
+  std::vector<part_role::Role> roles;
+  void add(const TopoDS_Shape& shape,const std::string& name,part_role::Role role) {
+    parts.push_back(shape); names.push_back(name); roles.push_back(role);
+  }
+  void append(const Generated& other) {
+    parts.insert(parts.end(),other.parts.begin(),other.parts.end());
+    names.insert(names.end(),other.names.begin(),other.names.end());
+    roles.insert(roles.end(),other.roles.begin(),other.roles.end());
+  }
 };
 struct ScrewProfile {
   double length,diameter,headDiameter,headHeight,tipLength,pocketDiameter,seatDistance,edgeClearance,tipClearance;
@@ -31,6 +41,25 @@ inline double separation(const TopoDS_Shape& a,const TopoDS_Shape& b) {
   if(!distance.IsDone()) throw std::runtime_error("Could not measure joinery clearance");
   return distance.Value();
 }
+struct Pocket {
+  TopoDS_Shape shape;
+  double edgeClearance;
+  Bnd_Box bounds;
+  Pocket(const TopoDS_Shape& machinedShape,double clearance):shape(machinedShape),edgeClearance(clearance) {
+    // Cache conservative bounds of the removed material, including OCCT shape
+    // tolerances. Do not depend on a potentially coarser display triangulation.
+    if(!shape.IsNull()) BRepBndLib::AddOptimal(shape,bounds,false,true);
+  }
+  bool tooCloseTo(const Pocket& other) const {
+    double clearance=std::max(edgeClearance,other.edgeClearance);
+    // Box distance is a lower bound on shape distance. The numerical margin
+    // only controls pruning; the exact clearance rule below stays unchanged.
+    // Empty bounds must fall through to the normal failed-measurement error.
+    if(!bounds.IsVoid() && !other.bounds.IsVoid() && bounds.Distance(other.bounds)>clearance+checks.distance)
+      return false;
+    return separation(shape,other.shape)<=clearance;
+  }
+};
 inline Generated generate(Project& project,const std::string& assembly) {
   project.assembly(assembly);
   std::map<std::string,TopoDS_Shape> boards;
@@ -76,6 +105,9 @@ inline Generated generate(Project& project,const std::string& assembly) {
       auto name=str(it->name,"hardware profile"); profiles.emplace(name,profile(project,it->value,name));
     }
   }
+  // One board may be machined by several hardware groups. Keep its pockets
+  // together so spacing rules cannot be bypassed by splitting the groups.
+  std::map<std::string,std::vector<Pocket>> pocketsByBoard;
   Generated screws;
   if(data.HasMember("hardware")) {
     array(data["hardware"],"hardware");
@@ -106,7 +138,7 @@ inline Generated generate(Project& project,const std::string& assembly) {
       if(groupAssembly!=assembly) continue;
       const auto& h=p->second; double radius=h.pocketDiameter/2;
       auto envelope=unite(boxShape(end.box),boxShape(side.box));
-      std::vector<TopoDS_Shape> previousPockets;
+      auto& previousPockets=pocketsByBoard[pocketed];
       for(int i=0;i<count;++i) {
         std::array<double,3> point;
         for(int a=0;a<3;++a) {
@@ -137,24 +169,27 @@ inline Generated generate(Project& project,const std::string& assembly) {
           if(overlap(screw,obstacle)>checks.volume || overlap(pocket,obstacle)>checks.volume || separation(pocket,obstacle)<h.edgeClearance-checks.distance)
             throw std::runtime_error(name+": screw/pocket violates clearance to "+id);
         }
-        for(const auto& other:previousPockets) if(separation(pocket,other)<=h.edgeClearance) throw std::runtime_error(name+": adjacent pockets are too close");
-        previousPockets.push_back(pocket);
+        // The cutter extends outside the stock so it opens the board face.
+        // Compare only the actual pocket inside this board; otherwise cutters
+        // from opposite joints appear to touch far outside the material.
+        Pocket machinedPocket(intersection(pocket,boxShape(end.box)),h.edgeClearance);
+        for(const auto& other:previousPockets)
+          if(machinedPocket.tooCloseTo(other))
+            throw std::runtime_error(name+": adjacent pockets are too close");
+        previousPockets.push_back(std::move(machinedPocket));
         auto& endShape=boards.at(pocketed); double before=volume(endShape);
         endShape=difference(difference(endShape,pocket),pilot);
         if(before-volume(endShape)<=checks.volume) throw std::runtime_error(name+": pocket misses its board");
         boards.at(receiver)=difference(boards.at(receiver),screw);
-        screws.parts.push_back(screw);
-        screws.names.push_back(numbered("S",first+i,name+" "+std::to_string(i+1)));
+        screws.add(screw,numbered("S",first+i,name+" "+std::to_string(i+1)),part_role::Role::Hardware);
       }
     }
   }
   Generated result;
   for(const auto& id:project.boards()) if(project.body(id).assembly==assembly) {
-    result.parts.push_back(boards.at(id));
-    result.names.push_back(numbered("B",project.body(id).number,project.body(id).name));
+    result.add(boards.at(id),numbered("B",project.body(id).number,project.body(id).name),part_role::Role::Board);
   }
-  result.parts.insert(result.parts.end(),screws.parts.begin(),screws.parts.end());
-  result.names.insert(result.names.end(),screws.names.begin(),screws.names.end());
+  result.append(screws);
   if(std::set<std::string>(result.names.begin(),result.names.end()).size()!=result.names.size()) throw std::runtime_error("Duplicate part names in "+assembly);
   for(std::size_t i=0;i<result.parts.size();++i) {
     if(solidVolumes(result.parts[i]).size()!=1) throw std::runtime_error(result.names[i]+": expected one valid solid");
@@ -170,13 +205,11 @@ inline Generated generate(Project& project,const std::string& assembly) {
       auto id=str(entry,"assembly.part_order");
       if(!seen.insert(id).second) throw std::runtime_error("Duplicate part_order entry: "+id);
       if(id=="@hardware") {
-        ordered.parts.insert(ordered.parts.end(),screws.parts.begin(),screws.parts.end());
-        ordered.names.insert(ordered.names.end(),screws.names.begin(),screws.names.end());
+        ordered.append(screws);
       } else {
         const auto& body=project.body(id);
         if(!boards.count(id)) throw std::runtime_error("part_order must name boards in its assembly: "+id);
-        ordered.parts.push_back(boards.at(id));
-        ordered.names.push_back(numbered("B",body.number,body.name));
+        ordered.add(boards.at(id),numbered("B",body.number,body.name),part_role::Role::Board);
       }
     }
     if(ordered.parts.size()!=result.parts.size()) throw std::runtime_error("part_order must include every board and @hardware when present");
@@ -189,8 +222,10 @@ inline void exportProject(Project& project,const std::string& assembly,const std
   auto generated=generate(project,assembly);
   auto expected=solidVolumes(compound(generated.parts));
   if(output.has_parent_path()) std::filesystem::create_directories(output.parent_path());
-  auto imported=writeNamedAssembly(output,generated.parts,generated.names,project.assembly(assembly).name);
+  TemporaryStep temporary(output,"writing");
+  auto imported=writeNamedAssembly(temporary.file(),generated.parts,generated.names,generated.roles,project.assembly(assembly).name);
   verifySolidVolumes(imported,expected,generated.parts.size());
+  temporary.publish(output);
   std::cout<<"Saved and verified project assembly '"<<assembly<<"': "<<std::filesystem::absolute(output)<<"\n";
 }
 }

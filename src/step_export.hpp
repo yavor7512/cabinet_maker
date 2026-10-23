@@ -4,11 +4,13 @@
 #include <TDocStd_Document.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_LayerTool.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <set>
 #include <sstream>
 #include <iomanip>
+#include "part_role.hpp"
 
 inline std::string numbered(const char* prefix, int number, const std::string& description) {
   std::ostringstream out;
@@ -27,11 +29,13 @@ inline std::string labelName(const TDF_Label& label) {
 inline TopoDS_Shape writeNamedAssembly(const std::filesystem::path& output,
                                       const std::vector<TopoDS_Shape>& parts,
                                       const std::vector<std::string>& names,
+                                      const std::vector<part_role::Role>& roles,
                                       const std::string& assemblyName) {
-  if (parts.size()!=names.size()) throw std::runtime_error("Part/name count mismatch");
+  if (parts.size()!=names.size() || parts.size()!=roles.size()) throw std::runtime_error("Part/name/role count mismatch");
   if (assemblyName.empty()) throw std::runtime_error("Assembly name cannot be empty");
   Handle(TDocStd_Document) doc = new TDocStd_Document("BinXCAF");
   auto tool = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+  auto layers = XCAFDoc_DocumentTool::LayerTool(doc->Main());
   const TDF_Label root = tool->NewShape();
   TDataStd_Name::Set(root,TCollection_ExtendedString(assemblyName.c_str(),true));
   for (std::size_t i=0;i<parts.size();++i) {
@@ -44,12 +48,15 @@ inline TopoDS_Shape writeNamedAssembly(const std::filesystem::path& output,
     if (it.More()) throw std::runtime_error("Named part contains multiple solids");
     const TDF_Label definition=tool->AddShape(solid,false);
     TDataStd_Name::Set(definition,TCollection_ExtendedString(names[i].c_str(),true));
+    layers->SetLayer(definition,TCollection_ExtendedString(part_role::layer(roles[i])));
     const TDF_Label instance=tool->AddComponent(root,definition,TopLoc_Location());
     TDataStd_Name::Set(instance,TCollection_ExtendedString(names[i].c_str(),true));
+    layers->SetLayer(instance,TCollection_ExtendedString(part_role::layer(roles[i])));
   }
   tool->UpdateAssemblies();
   STEPCAFControl_Writer writer;
   writer.SetNameMode(true);
+  writer.SetLayerMode(true);
   Interface_Static::SetCVal("write.step.unit","MM");
   if (!writer.Transfer(doc,STEPControl_AsIs) || writer.Write(output.string().c_str())!=IFSelect_RetDone)
     throw std::runtime_error("Could not write named STEP assembly");
@@ -58,9 +65,11 @@ inline TopoDS_Shape writeNamedAssembly(const std::filesystem::path& output,
   Handle(TDocStd_Document) imported = new TDocStd_Document("BinXCAF");
   STEPCAFControl_Reader reader;
   reader.SetNameMode(true);
+  reader.SetLayerMode(true);
   if (reader.ReadFile(output.string().c_str())!=IFSelect_RetDone || !reader.Transfer(imported))
     throw std::runtime_error("Could not reimport named STEP assembly");
   auto importedTool=XCAFDoc_DocumentTool::ShapeTool(imported->Main());
+  auto importedLayers=XCAFDoc_DocumentTool::LayerTool(imported->Main());
   TDF_LabelSequence roots;
   importedTool->GetFreeShapes(roots);
   if (roots.Length()!=1 || !XCAFDoc_ShapeTool::IsAssembly(roots.Value(1)))
@@ -82,6 +91,10 @@ inline TopoDS_Shape writeNamedAssembly(const std::filesystem::path& output,
     const auto original=std::find(names.begin(),names.end(),name);
     if (original==names.end()) throw std::runtime_error("Unexpected STEP part name");
     const auto& source=parts[static_cast<std::size_t>(original-names.begin())];
+    const auto role=roles[static_cast<std::size_t>(original-names.begin())];
+    if(!importedLayers->IsSet(definition,TCollection_ExtendedString(part_role::layer(role)))
+       && !importedLayers->IsSet(components.Value(i),TCollection_ExtendedString(part_role::layer(role))))
+      throw std::runtime_error("STEP part role did not survive export");
     // Check each named instance's world bounds, detecting lost placement.
     Bnd_Box sourceBounds, importedBounds;
     BRepBndLib::AddOptimal(source,sourceBounds,false,false);

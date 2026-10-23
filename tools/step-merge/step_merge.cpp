@@ -3,11 +3,13 @@
 #include <XCAFDoc_Editor.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_LayerTool.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
@@ -28,11 +30,15 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include "../../src/part_role.hpp"
+#include "../../src/step_role_metadata.hpp"
+#include "../../src/temporary_step.hpp"
 namespace fs=std::filesystem;
 using Doc=Handle(TDocStd_Document);
 Doc read(const fs::path& path) {
   Doc doc=new TDocStd_Document("BinXCAF");
   STEPCAFControl_Reader reader;
+  reader.SetLayerMode(true);
   if(reader.ReadFile(path.string().c_str())!=IFSelect_RetDone || !reader.Transfer(doc))
     throw std::runtime_error("Cannot read STEP: "+path.string());
   return doc;
@@ -43,8 +49,9 @@ std::string name(const TDF_Label& l) {
   std::vector<char> buffer(n->Get().LengthOfCString()+1);
   Standard_PCharacter p=buffer.data(); n->Get().ToUTF8CString(p); return p;
 }
-struct Record {std::string path; std::array<double,6> bounds{}; double volume=0; int solids=0;};
-void inspect(const TDF_Label& label,const TopLoc_Location& parent,const std::string& path,std::vector<Record>& out) {
+struct Record {std::string path; std::array<double,6> bounds{}; double volume=0; int solids=0,role=0;};
+void inspect(const TDF_Label& label,const TopLoc_Location& parent,const std::string& path,
+             const Handle(XCAFDoc_LayerTool)& layers,std::vector<Record>& out,int inheritedRoles=0) {
   TDF_Label def=label;
   TopLoc_Location location=parent;
   if(XCAFDoc_ShapeTool::IsReference(label)) {
@@ -52,10 +59,11 @@ void inspect(const TDF_Label& label,const TopLoc_Location& parent,const std::str
     location=parent*XCAFDoc_ShapeTool::GetLocation(label);
   }
   const auto key=path+"/"+name(label)+"["+name(def)+"]";
+  const int roles=inheritedRoles|part_role::flags(layers,label,def);
   TDF_LabelSequence children;
   if(XCAFDoc_ShapeTool::GetComponents(def,children,false)) {
-    out.push_back({key});
-    for(int i=1;i<=children.Length();++i) inspect(children.Value(i),location,key,out);
+    Record assembly;assembly.path=key;assembly.role=roles;out.push_back(assembly);
+    for(int i=1;i<=children.Length();++i) inspect(children.Value(i),location,key,layers,out,roles);
   } else {
     auto shape=XCAFDoc_ShapeTool::GetShape(def).Moved(location);
     Record r; r.path=key;
@@ -64,13 +72,17 @@ void inspect(const TDF_Label& label,const TopLoc_Location& parent,const std::str
     b.Get(r.bounds[0],r.bounds[1],r.bounds[2],r.bounds[3],r.bounds[4],r.bounds[5]);
     GProp_GProps props; BRepGProp::VolumeProperties(shape,props); r.volume=props.Mass();
     for(TopExp_Explorer it(shape,TopAbs_SOLID);it.More();it.Next()) ++r.solids;
+    r.role=roles;
+    if(r.solids==0 || !std::isfinite(r.volume) || r.volume<=0 || !BRepCheck_Analyzer(shape).IsValid())
+      throw std::runtime_error("Invalid or non-solid geometry: "+key);
     out.push_back(r);
   }
 }
 std::vector<Record> snapshot(const Doc& doc) {
   TDF_LabelSequence roots; XCAFDoc_DocumentTool::ShapeTool(doc->Main())->GetFreeShapes(roots);
+  auto layers=XCAFDoc_DocumentTool::LayerTool(doc->Main());
   std::vector<Record> result;
-  for(int i=1;i<=roots.Length();++i) inspect(roots.Value(i),TopLoc_Location(),"",result);
+  for(int i=1;i<=roots.Length();++i) inspect(roots.Value(i),TopLoc_Location(),"",layers,result);
   std::sort(result.begin(),result.end(),[](const Record&a,const Record&b){return a.path<b.path || (a.path==b.path && a.bounds<b.bounds);});
   return result;
 }
@@ -179,9 +191,22 @@ EXIT STATUS
       auto source=read(input); TDF_LabelSequence roots;
       XCAFDoc_DocumentTool::ShapeTool(source->Main())->GetFreeShapes(roots);
       if(roots.IsEmpty()) throw std::runtime_error("No shapes in "+input.string());
+      std::vector<Record> sourceRecords;
+      auto sourceLayers=XCAFDoc_DocumentTool::LayerTool(source->Main());
+      for(int i=1;i<=roots.Length();++i)
+        inspect(roots.Value(i),TopLoc_Location(),"",sourceLayers,sourceRecords);
       auto group=tool->NewShape();
       const auto groupName=std::to_string(++index)+" - "+input.stem().string();
       if(!XCAFDoc_Editor::Extract(roots,group)) throw std::runtime_error("Cannot copy "+input.string());
+      std::vector<Record> copiedRecords;
+      inspect(group,TopLoc_Location(),"",XCAFDoc_DocumentTool::LayerTool(doc->Main()),copiedRecords);
+      auto roleSequence=[](const std::vector<Record>&records) {
+        std::vector<int> sequence;
+        for(const auto& record:records) if(record.solids) sequence.push_back(record.role);
+        return sequence;
+      };
+      if(roleSequence(sourceRecords)!=roleSequence(copiedRecords))
+        throw std::runtime_error("Part roles changed while copying "+input.string());
       TDataStd_Name::Set(group,TCollection_ExtendedString(groupName.c_str(),true));
       auto instance=tool->AddComponent(root,group,placement);
       TDataStd_Name::Set(instance,TCollection_ExtendedString(groupName.c_str(),true));
@@ -190,14 +215,12 @@ EXIT STATUS
     if(color) paint(doc,*color);
     const auto before=snapshot(doc);
     if(output.has_parent_path()) fs::create_directories(output.parent_path());
-    // Write to a temporary sibling and publish only after successful verification.
-    fs::path temp=output; temp += ".merging.step";
-    if(fs::exists(temp)) throw std::runtime_error("Temporary path already exists: "+temp.string());
-    try {
-      STEPCAFControl_Writer writer; Interface_Static::SetCVal("write.step.unit","MM");
-      if(!writer.Transfer(doc,STEPControl_AsIs) || writer.Write(temp.string().c_str())!=IFSelect_RetDone)
+    TemporaryStep temporary(output,"merging");
+    {
+      STEPCAFControl_Writer writer; writer.SetLayerMode(true); Interface_Static::SetCVal("write.step.unit","MM");
+      if(!writer.Transfer(doc,STEPControl_AsIs) || writer.Write(temporary.file().string().c_str())!=IFSelect_RetDone)
         throw std::runtime_error("STEP export failed");
-      const auto imported=read(temp);
+      const auto imported=read(temporary.file());
       const auto after=snapshot(imported);
       if(color) {
         TDF_LabelSequence roots;
@@ -208,12 +231,13 @@ EXIT STATUS
       if(before.size()!=after.size()) throw std::runtime_error("Assembly/part count changed");
       for(std::size_t i=0;i<before.size();++i) {
         const auto&a=before[i]; const auto&b=after[i];
-        if(a.path!=b.path || a.solids!=b.solids) throw std::runtime_error("Hierarchy, names or solid counts changed");
+        if(a.path!=b.path || a.solids!=b.solids || a.role!=b.role)
+          throw std::runtime_error("Hierarchy, names, roles or solid counts changed");
         for(int k=0;k<6;++k) if(std::abs(a.bounds[k]-b.bounds[k])>1e-5) throw std::runtime_error("Part position changed");
         if(std::abs(a.volume-b.volume)>std::max(1e-5,std::abs(a.volume)*1e-7)) throw std::runtime_error("Part volume changed");
       }
-      fs::rename(temp,output);
-    } catch(...) {fs::remove(temp);throw;}
+      temporary.publish(output);
+    }
     std::cout<<"Merged and verified "<<inputs.size()<<" files: "<<fs::absolute(output)<<"\n";
     return 0;
   } catch(const Standard_Failure& e) {std::cerr<<e.GetMessageString()<<'\n';return 1;}

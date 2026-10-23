@@ -155,7 +155,7 @@ drawer-test: drawer-build
 cutlist-test: cutlist-build
 	"$(CTEST)" --test-dir "$(CUTLIST_BUILD_DIR)" --output-on-failure --no-tests=error
 merge-test: merge-build
-	bash "$(ROOT)/tools/step-merge/test.sh" "$(MERGE_BIN)" "$(ROOT)/tests/fixtures/pre-config/cabinet-carcass.step"
+	bash "$(ROOT)/tools/step-merge/test.sh" "$(MERGE_BIN)" "$(ROOT)/tests/fixtures/pre-config/cabinet-carcass.step" "$(MERGE_BUILD_DIR)/check-orientation"
 
 # Fixed artifacts captured before the first configuration refactor, independent
 # of current construction recipes and the geometry engine.

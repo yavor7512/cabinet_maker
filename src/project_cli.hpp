@@ -106,7 +106,8 @@ inline int projectCommand(int argc,char** argv) {
   // Validate every destination before starting a multi-assembly export.
   for(const auto& id:ids) {
     const auto destination=output.empty()?directory/project.assembly(id).filename:output;
-    if(std::filesystem::weakly_canonical(path)==std::filesystem::weakly_canonical(destination))
+    if(std::filesystem::weakly_canonical(path)==std::filesystem::weakly_canonical(destination)
+       || (std::filesystem::exists(destination) && std::filesystem::equivalent(path,destination)))
       throw std::runtime_error("Output must not overwrite the project configuration");
   }
   for(const auto& id:ids) exportProject(project,id,output.empty()?directory/project.assembly(id).filename:output);

@@ -22,10 +22,13 @@ inline TopoDS_Shape unite(const TopoDS_Shape& a, const TopoDS_Shape& b) {
   if (!op.IsDone()) throw std::runtime_error("Screw union failed");
   return op.Shape();
 }
-inline double overlap(const TopoDS_Shape& a, const TopoDS_Shape& b) {
+inline TopoDS_Shape intersection(const TopoDS_Shape& a, const TopoDS_Shape& b) {
   BRepAlgoAPI_Common op(a,b);
   if (!op.IsDone()) throw std::runtime_error("Boolean intersection check failed");
-  return volume(op.Shape());
+  return op.Shape();
+}
+inline double overlap(const TopoDS_Shape& a, const TopoDS_Shape& b) {
+  return volume(intersection(a,b));
 }
 inline gp_Pnt along(const gp_Pnt& p, const gp_Dir& direction, double distance) {
   return p.Translated(gp_Vec(direction) * distance);

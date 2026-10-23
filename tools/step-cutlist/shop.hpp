@@ -10,17 +10,50 @@ bool sharedWidth(Tree n){return n->part<0&&n->split=='H'&&std::abs(n->a->w-n->b-
 bool sharedHeight(Tree n){return n->part<0&&n->split=='V'&&std::abs(n->a->h-n->b->h)<eps;}
 // A remainder dimension depends on the actual kerf. Always finish it from
 // the kept edge, even when its nominal size already matches the requested size.
+struct PlanPanel {
+  double x=0,y=0,w=0,h=0;
+  bool fixedW=true,fixedH=true;
+  char previous=0;
+  int stage=0;
+};
+// The score and the emitted shop instructions traverse the same plan. Keep
+// the physical saw-sequence validator separate from this planning traversal.
+template<class CutFn,class PlaceFn>
+void visitShopPlan(Tree n,PlanPanel panel,double kerf,int mode,CutFn& cut,PlaceFn& place) {
+  if(n->w>panel.w+eps||n->h>panel.h+eps)throw std::runtime_error("Shop subtree exceeds subpanel");
+  auto saw=[&](char axis,double at){
+    if(axis!=panel.previous){++panel.stage;panel.previous=axis;}
+    cut(axis,panel.stage,panel.x,panel.y,panel.w,panel.h,at);
+  };
+  if((mode==0||n->part>=0||(mode==2&&n->split=='V')||(mode==3&&sharedWidth(n)))
+      &&(panel.w>n->w+eps||!panel.fixedW)) {
+    saw('V',panel.x+n->w);panel.w=n->w;panel.fixedW=true;
+  }
+  if((mode==0||n->part>=0||(mode==2&&n->split=='H')||(mode==3&&sharedHeight(n)))
+      &&(panel.h>n->h+eps||!panel.fixedH)) {
+    saw('H',panel.y+n->h);panel.h=n->h;panel.fixedH=true;
+  }
+  if(n->part>=0){place(n,panel.x,panel.y);return;}
+  if(n->split=='V') {
+    saw('V',panel.x+n->a->w);
+    auto left=panel;left.w=n->a->w;left.fixedW=true;
+    auto right=panel;right.x=panel.x+n->a->w+kerf;right.w=panel.w-n->a->w-kerf;right.fixedW=false;
+    visitShopPlan(n->a,left,kerf,mode,cut,place);
+    visitShopPlan(n->b,right,kerf,mode,cut,place);
+  }else{
+    saw('H',panel.y+n->a->h);
+    auto bottom=panel;bottom.h=n->a->h;bottom.fixedH=true;
+    auto top=panel;top.y=panel.y+n->a->h+kerf;top.h=panel.h-n->a->h-kerf;top.fixedH=false;
+    visitShopPlan(n->a,bottom,kerf,mode,cut,place);
+    visitShopPlan(n->b,top,kerf,mode,cut,place);
+  }
+}
 int plannedCuts(Tree n,double w,double h,double kerf,int mode,bool fixedW=true,bool fixedH=true) {
   int count=0;
-  if((mode==0||n->part>=0||(mode==2&&n->split=='V')||(mode==3&&sharedWidth(n)))&&(w>n->w+eps||!fixedW)) {++count;w=n->w;fixedW=true;}
-  if((mode==0||n->part>=0||(mode==2&&n->split=='H')||(mode==3&&sharedHeight(n)))&&(h>n->h+eps||!fixedH)) {++count;h=n->h;fixedH=true;}
-  if(n->part>=0)return count;
-  if(n->split=='V')return count+1
-    +plannedCuts(n->a,n->a->w,h,kerf,mode,true,fixedH)
-    +plannedCuts(n->b,w-n->a->w-kerf,h,kerf,mode,false,fixedH);
-  return count+1
-    +plannedCuts(n->a,w,n->a->h,kerf,mode,fixedW,true)
-    +plannedCuts(n->b,w,h-n->a->h-kerf,kerf,mode,fixedW,false);
+  auto cut=[&](char,int,double,double,double,double,double){++count;};
+  auto place=[](Tree,double,double){};
+  visitShopPlan(n,PlanPanel{0,0,w,h,fixedW,fixedH},kerf,mode,cut,place);
+  return count;
 }
 double nodeKerf(Tree n){if(n->part>=0)return 0;return n->split=='V'?n->w-n->a->w-n->b->w:n->h-n->a->h-n->b->h;}
 int planMode(Tree n,double w,double h,double kerf){

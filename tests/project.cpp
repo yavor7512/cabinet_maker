@@ -70,12 +70,48 @@ void compare(const char* before,const char* after) {
   std::cout<<"Equivalent hierarchy, colors and occupied material ("<<a.parts.size()<<" parts): "<<after<<"\n";
 }
 
+void checkPocketClearances() {
+  auto cylinder=[](double x,double y=0) {
+    return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x,y,0),gp_Dir(0,0,1)),3.5,20).Shape();
+  };
+  auto verify=[](const TopoDS_Shape& a,const TopoDS_Shape& b,double ca,double cb,bool expected,const std::string& name) {
+    // Unpruned OCCT distance is the independent oracle for the optimization.
+    bool measured=separation(a,b)<=std::max(ca,cb);
+    require(measured==expected,name+": unexpected fixture clearance");
+    Pocket first(a,ca),second(b,cb);
+    require(first.tooCloseTo(second)==measured,name+": pruned clearance differs from exact distance");
+    require(second.tooCloseTo(first)==measured,name+": clearance depends on pocket order");
+  };
+  auto first=cylinder(0);
+  verify(first,first,2,2,true,"Coincident pockets");
+  verify(first,cylinder(6),2,2,true,"Overlapping pockets");
+  verify(BRepPrimAPI_MakeBox(1,1,1).Shape(),BRepPrimAPI_MakeBox(gp_Pnt(1,0,0),1,1,1).Shape(),
+    0,0,true,"Touching pockets at zero clearance");
+  verify(first,cylinder(7.1),0,0,false,"Separated pockets at zero clearance");
+  for(double gap:{1.9,2-checks.distance/4,2.0,2+checks.distance/4,2.1,100.0})
+    verify(first,cylinder(7+gap),2,2,gap<=2,"Pocket gap "+std::to_string(gap));
+  verify(first,cylinder(10.5),2,4,true,"Mixed profile clearances");
+
+  // Overlapping bounding boxes cannot prove a collision between curved shapes.
+  auto diagonal=cylinder(5.5,5.5);
+  verify(first,diagonal,.5,.5,false,"Clear pockets with overlapping bounds");
+  verify(first,diagonal,2,2,true,"Close pockets with overlapping bounds");
+
+  gp_Trsf placement;
+  placement.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(1,2,3)),.37);
+  placement.SetTranslationPart(gp_Vec(900000,-900000,900000));
+  for(double gap:{1.9,2.1})
+    verify(first.Moved(TopLoc_Location(placement)),cylinder(7+gap).Moved(TopLoc_Location(placement)),
+      2,2,gap<=2,"Rotated pockets at large coordinates");
+}
+
 int main(int argc,char** argv) {
   try {
     if(argc==4 && std::string(argv[1])=="--compare") { compare(argv[2],argv[3]); return 0; }
     require(argc==3,"Expected project file and temporary test directory");
     const std::filesystem::path source=argv[1],dir=argv[2];
     std::filesystem::create_directories(dir);
+    checkPocketClearances();
     Project initial(source);
     require(initial.assemblyIds()==std::vector<std::string>({"carcass","upper","lower"}),"Configured merge order changed");
     require(initial.assembly("lower").filename=="tall-front-bottom-aligned.step","Configured filename changed");
@@ -158,6 +194,20 @@ int main(int argc,char** argv) {
     Project loose(source,{{"DADO_CLEARANCE_MM","0.2"}}); auto relieved=generate(loose,"upper");
     for(int i=0;i<4;++i) require(volume(relieved.parts[i])<volume(baseline.parts[i])-1,"Dado clearance did not remove extra material");
     near(volume(relieved.parts[4]),volume(baseline.parts[4]),"Dado clearance must not resize bottom");
+    auto separateBoards=mutate("pockets-on-separate-boards",[&](rapidjson::Document& doc) {
+      auto& groups=doc["hardware"];
+      while(groups.Size()>1) groups.PopBack();
+      groups[0]["count"].SetInt(1);
+      rapidjson::Value second(groups[0],doc.GetAllocator());
+      set(doc,second["pocketed"],"upper.back");
+      set(doc,second["origin"][1],"upper.back.center_y");
+      set(doc,second["axis"][1],"-sin_deg(upper_pocket_angle)");
+      set(doc,second["name"],"Separate back pocket screw");
+      second["start_number"].SetInt(100);
+      groups.PushBack(second,doc.GetAllocator());
+    });
+    Project separate(separateBoards);
+    require(generate(separate,"upper").parts.size()==7,"Pockets on different boards must remain valid");
 
     int failures=0;
     auto rejects=[&](const std::string& expected,const std::function<void()>& operation) {
@@ -165,6 +215,10 @@ int main(int argc,char** argv) {
       catch(const std::exception& e) { require(std::string(e.what()).find(expected)!=std::string::npos,"Wrong failure; expected '"+expected+"', got '"+e.what()+"'"); ++failures; return; }
       throw std::runtime_error("Accepted invalid project; expected "+expected);
     };
+    rejects("Could not measure joinery clearance",[&] {
+      Pocket empty(compound({}),2),valid(boxShape(initial.body("upper.front").box),2);
+      empty.tooCloseTo(valid);
+    });
     rejects("Unknown parameter",[&]{Project bad(source,{{"TYPO","42"}});});
     rejects("plain .step filename",[&]{auto path=mutate("outside-output",[&](rapidjson::Document& doc){set(doc,doc["assemblies"]["lower"]["filename"],"../outside.step");});Project bad(path);});
     rejects("Duplicate assembly filename",[&]{auto path=mutate("duplicate-output",[&](rapidjson::Document& doc){set(doc,doc["assemblies"]["lower"]["filename"],"CABINET-CARCASS.step");});Project bad(path);});
@@ -189,6 +243,22 @@ int main(int argc,char** argv) {
     rejects("dimensions must be",[&]{auto path=mutate("negative-span",[&](rapidjson::Document& doc){set(doc,doc["boards"]["lower.front"]["between"]["x"][1],"lower.left.left_x");});Project bad(path);});
     rejects("Unknown cut type",[&]{auto path=mutate("bad-cut",[&](rapidjson::Document& doc){set(doc,doc["cuts"][0]["type"],"mystery");});Project bad(path);generate(bad,"upper");});
     rejects("Unknown body",[&]{auto path=mutate("bad-target",[&](rapidjson::Document& doc){set(doc,doc["cuts"][0]["targets"][0],"missing");});Project bad(path);generate(bad,"upper");});
+    rejects("adjacent pockets are too close",[&]{
+      auto path=mutate("pockets-across-groups",[&](rapidjson::Document& doc) {
+        auto& groups=doc["hardware"];
+        groups[0]["count"].SetInt(1);
+        rapidjson::Value second(groups[0],doc.GetAllocator());
+        set(doc,second["origin"][2],"upper_box.bottom_z + upper_screw_lower + 10");
+        set(doc,second["name"],"Nearby pocket screw");
+        second["start_number"].SetInt(100);
+        groups.PushBack(second,doc.GetAllocator());
+        rapidjson::Value wide(doc["hardware_profiles"]["drawer_screw"],doc.GetAllocator());
+        wide["edge_clearance"].SetInt(4);
+        doc["hardware_profiles"].AddMember("wide_clearance",wide,doc.GetAllocator());
+        set(doc,groups[0]["profile"],"wide_clearance");
+      });
+      Project bad(path);generate(bad,"upper");
+    });
     rejects("expected integer",[&]{Project bad(source,{{"SCREWS_PER_CORNER","1.5"}});generate(bad,"upper");});
     rejects("screw leaves its joint",[&]{Project bad(source,{{"SCREW_LENGTH_MM","40"}});generate(bad,"upper");});
     rejects("Unknown assembly",[&]{generate(initial,"missing");});

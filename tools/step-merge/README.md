@@ -22,8 +22,9 @@ Source units are imported by OpenCascade; output uses millimetres. Standard
 XCAF metadata is copied, but unsupported annotations are not guaranteed to survive.
 
 The output is reimported and its hierarchy, names, per-part world bounds, volumes
-and solid counts are checked before replacing the destination. A temporary sibling
-ending `.merging.step` is used during export. Existing temporary files are refused.
+and solid counts are checked before replacing the destination. Each run reserves
+a private numbered sibling directory for its temporary STEP. Stale directories
+from interrupted runs are left untouched.
 
 Run smoke tests with `bash test.sh ./build/step-merge /path/to/input.step`.
 

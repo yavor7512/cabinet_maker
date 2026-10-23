@@ -3,6 +3,7 @@
 #include <STEPCAFControl_Reader.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_LayerTool.hxx>
 #include <TDocStd_Document.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDF_LabelSequence.hxx>
@@ -18,7 +19,8 @@
 #include <gp_Pln.hxx>
 #include <gp_Ax3.hxx>
 #include <filesystem>
-#include <regex>
+#include "../../src/part_role.hpp"
+#include "../../src/step_role_metadata.hpp"
 namespace cut {
 struct Rejected {std::string name,reason; bool excluded=false;};
 struct GeometrySettings {double tolerance=0.01,maxThickness=50.8,maxRatio=0.5; bool strict=false;};
@@ -92,27 +94,34 @@ Part classify(const TopoDS_Shape&solid,const std::string&name,const GeometrySett
   if(!found)throw std::runtime_error("cannot identify sheet blank with six surviving rectangular exterior datum planes");
   return result;
 }
-void walk(const TDF_Label&label,const TopLoc_Location&parent,const std::string&path,const GeometrySettings&cfg,std::vector<Part>&parts,std::vector<Rejected>&rejected) {
+void walk(const TDF_Label&label,const TopLoc_Location&parent,const std::string&path,const GeometrySettings&cfg,
+          const Handle(XCAFDoc_LayerTool)&layers,std::vector<Part>&parts,std::vector<Rejected>&rejected,int inheritedRoles=0) {
   auto def=label;auto location=parent;
   if(XCAFDoc_ShapeTool::IsReference(label)) {XCAFDoc_ShapeTool::GetReferredShape(label,def);location=parent*XCAFDoc_ShapeTool::GetLocation(label);}
+  const int roles=inheritedRoles|part_role::flags(layers,label,def);
   std::string full=path+"/"+labelName(def);TDF_LabelSequence children;
   if(XCAFDoc_ShapeTool::GetComponents(def,children,false)) {
-    for(int i=1;i<=children.Length();++i)walk(children.Value(i),location,full+"["+std::to_string(i)+"]",cfg,parts,rejected);return;
+    for(int i=1;i<=children.Length();++i)walk(children.Value(i),location,full+"["+std::to_string(i)+"]",cfg,layers,parts,rejected,roles);return;
   }
   auto shape=XCAFDoc_ShapeTool::GetShape(def).Moved(location);int i=0;
   for(TopExp_Explorer it(shape,TopAbs_SOLID);it.More();it.Next()) {
     auto id=full+"#"+std::to_string(++i);
-    const std::regex hardware(R"(\b(screw|bolt|nut|washer)\b)",std::regex::icase);
-    if(std::regex_search(labelName(def),hardware)) {rejected.push_back({id,"named hardware excluded from plywood inventory",true});continue;}
-    try {parts.push_back(classify(it.Current(),id,cfg));}catch(const std::exception&e){rejected.push_back({id,e.what()});}
+    // Child metadata adds to inherited metadata. Contradictions are reported,
+    // never silently resolved in favor of hardware exclusion.
+    if(roles==(part_role::boardFlag|part_role::hardwareFlag)) {rejected.push_back({id,"conflicting board and hardware roles"});continue;}
+    if(roles&part_role::hardwareFlag) {rejected.push_back({id,"hardware role excluded from plywood inventory",true});continue;}
+    try {parts.push_back(classify(it.Current(),id,cfg));}
+    catch(const std::exception&e) {rejected.push_back({id,e.what()});}
   }
   if(!i)rejected.push_back({full,"no solid: open surfaces/wires are unsupported"});
 }
 void load(const std::filesystem::path&path,const GeometrySettings&cfg,std::vector<Part>&parts,std::vector<Rejected>&rejected) {
   Handle(TDocStd_Document)doc=new TDocStd_Document("BinXCAF");STEPCAFControl_Reader reader;
+  reader.SetLayerMode(true);
   if(reader.ReadFile(path.string().c_str())!=IFSelect_RetDone || !reader.Transfer(doc))throw std::runtime_error("Cannot read STEP: "+path.string());
   TDF_LabelSequence roots;XCAFDoc_DocumentTool::ShapeTool(doc->Main())->GetFreeShapes(roots);
   if(roots.IsEmpty())throw std::runtime_error("No shapes: "+path.string());
-  for(int i=1;i<=roots.Length();++i)walk(roots.Value(i),TopLoc_Location(),path.filename().string()+"["+std::to_string(i)+"]",cfg,parts,rejected);
+  auto layers=XCAFDoc_DocumentTool::LayerTool(doc->Main());
+  for(int i=1;i<=roots.Length();++i)walk(roots.Value(i),TopLoc_Location(),path.filename().string()+"["+std::to_string(i)+"]",cfg,layers,parts,rejected);
 }
 }

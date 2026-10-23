@@ -11,27 +11,13 @@ struct SawCut {int sheet,stage,sequence=0;char axis;double x,y,w,h,at,length;std
 void shopLayout(Tree n,int sheet,double x,double y,double w,double h,double kerf,
                 std::vector<Placement>&places,std::vector<SawCut>&cuts,
                 char previous=0,int stage=0,int mode=0,bool fixedW=true,bool fixedH=true) {
-  auto saw=[&](char axis,double at){
-    if(axis!=previous){++stage;previous=axis;}
-    cuts.push_back({sheet,stage,0,axis,x,y,w,h,at,axis=='V'?h:w});
+  auto cut=[&](char axis,int currentStage,double cx,double cy,double cw,double ch,double at){
+    cuts.push_back({sheet,currentStage,0,axis,cx,cy,cw,ch,at,axis=='V'?ch:cw});
   };
-  if(n->w>w+eps||n->h>h+eps)throw std::runtime_error("Shop subtree exceeds subpanel");
-  if((mode==0||n->part>=0||(mode==2&&n->split=='V')||(mode==3&&sharedWidth(n)))&&(w>n->w+eps||!fixedW)) {
-    saw('V',x+n->w);w=n->w;fixedW=true;
-  }
-  if((mode==0||n->part>=0||(mode==2&&n->split=='H')||(mode==3&&sharedHeight(n)))&&(h>n->h+eps||!fixedH)) {
-    saw('H',y+n->h);h=n->h;fixedH=true;
-  }
-  if(n->part>=0){places.push_back({n->part,sheet,x,y,n->w,n->h,n->rotated});return;}
-  if(n->split=='V') {
-    saw('V',x+n->a->w);
-    shopLayout(n->a,sheet,x,y,n->a->w,h,kerf,places,cuts,previous,stage,mode,true,fixedH);
-    shopLayout(n->b,sheet,x+n->a->w+kerf,y,w-n->a->w-kerf,h,kerf,places,cuts,previous,stage,mode,false,fixedH);
-  }else{
-    saw('H',y+n->a->h);
-    shopLayout(n->a,sheet,x,y,w,n->a->h,kerf,places,cuts,previous,stage,mode,fixedW,true);
-    shopLayout(n->b,sheet,x,y+n->a->h+kerf,w,h-n->a->h-kerf,kerf,places,cuts,previous,stage,mode,fixedW,false);
-  }
+  auto place=[&](Tree part,double px,double py){
+    places.push_back({part->part,sheet,px,py,part->w,part->h,part->rotated});
+  };
+  visitShopPlan(n,PlanPanel{x,y,w,h,fixedW,fixedH,previous,stage},kerf,mode,cut,place);
 }
 
 struct SawTrace {std::vector<std::string> inputs,finished;};

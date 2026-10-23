@@ -29,6 +29,66 @@ int main(int argc,char**argv){try{
   reject(BRepAlgoAPI_Cut(box,BRepPrimAPI_MakeBox(gp_Pnt(10,10,0),20,20,10).Shape()).Shape());
   reject(BRepAlgoAPI_Cut(box,BRepPrimAPI_MakeBox(gp_Pnt(0,0,0),20,20,18).Shape()).Shape());
   reject(BRepPrimAPI_MakeBox(100,100,100).Shape());
+  {
+    // Geometry and explicit STEP role, never the display name, decide inventory.
+    Handle(TDocStd_Document) doc=new TDocStd_Document("BinXCAF");
+    auto tool=XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+    auto layers=XCAFDoc_DocumentTool::LayerTool(doc->Main());
+    auto root=tool->NewShape();TDataStd_Name::Set(root,TCollection_ExtendedString("Named parts"));
+    auto board=tool->AddShape(box,false);TDataStd_Name::Set(board,TCollection_ExtendedString("Screw tray panel"));
+    auto machined=tool->AddShape(dado,false);
+    TDataStd_Name::Set(machined,TCollection_ExtendedString("Screw tray dado panel"));
+    auto screw=tool->AddShape(BRepPrimAPI_MakeCylinder(5,25).Shape(),false);
+    TDataStd_Name::Set(screw,TCollection_ExtendedString("Shelf support"));
+    auto untyped=tool->AddShape(BRepPrimAPI_MakeCylinder(6,30).Shape(),false);
+    TDataStd_Name::Set(untyped,TCollection_ExtendedString("Pocket screw"));
+    layers->SetLayer(board,TCollection_ExtendedString(part_role::boardLayer));
+    layers->SetLayer(machined,TCollection_ExtendedString(part_role::boardLayer));
+    layers->SetLayer(screw,TCollection_ExtendedString(part_role::hardwareLayer));
+    tool->AddComponent(root,board,TopLoc_Location());
+    tool->AddComponent(root,machined,TopLoc_Location());
+    tool->AddComponent(root,screw,TopLoc_Location());
+    tool->AddComponent(root,untyped,TopLoc_Location());
+    tool->UpdateAssemblies();
+    std::vector<Part> namedParts;std::vector<Rejected> namedRejected;
+    walk(root,TopLoc_Location(),"test",{},layers,namedParts,namedRejected);
+    require(namedParts.size()==2&&namedParts[0].name.find("Screw tray panel")!=std::string::npos,
+      "rectangular board with a hardware word was excluded");
+    require(namedRejected.size()==2&&namedRejected[0].excluded&&!namedRejected[1].excluded,
+      "role-tagged hardware or untyped unsupported geometry was misclassified");
+    TDataStd_Name::Set(board,TCollection_ExtendedString("Plain panel"));
+    TDataStd_Name::Set(screw,TCollection_ExtendedString("Screw"));
+    TDataStd_Name::Set(untyped,TCollection_ExtendedString("Ordinary part"));
+    namedParts.clear();namedRejected.clear();
+    walk(root,TopLoc_Location(),"test",{},layers,namedParts,namedRejected);
+    require(namedParts.size()==2&&namedRejected.size()==2&&namedRejected[0].excluded&&!namedRejected[1].excluded,
+      "renaming changed board or hardware classification");
+    namedParts.clear();namedRejected.clear();
+    GeometrySettings strict;strict.strict=true;
+    walk(root,TopLoc_Location(),"test",strict,layers,namedParts,namedRejected);
+    require(namedParts.size()==1&&namedRejected.size()==3,
+      "strict mode did not reject the machined board");
+    require(!namedRejected[0].excluded&&namedRejected[1].excluded&&!namedRejected[2].excluded,
+      "strict mode misclassified a machined board or untyped solid");
+  }
+  {
+    Handle(TDocStd_Document) doc=new TDocStd_Document("BinXCAF");
+    auto tool=XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+    auto layers=XCAFDoc_DocumentTool::LayerTool(doc->Main());
+    auto root=tool->NewShape();
+    layers->SetLayer(root,TCollection_ExtendedString(part_role::hardwareLayer));
+    auto untyped=tool->AddShape(box,false);
+    auto explicitBoard=tool->AddShape(BRepPrimAPI_MakeBox(200,100,18).Shape(),false);
+    layers->SetLayer(explicitBoard,TCollection_ExtendedString(part_role::boardLayer));
+    tool->AddComponent(root,untyped,TopLoc_Location());
+    tool->AddComponent(root,explicitBoard,TopLoc_Location());
+    tool->UpdateAssemblies();
+    std::vector<Part> accepted;std::vector<Rejected> rejected;
+    walk(root,TopLoc_Location(),"inherited",{},layers,accepted,rejected);
+    require(accepted.empty()&&rejected.size()==2&&rejected[0].excluded&&!rejected[1].excluded,
+      "assembly role did not exclude untyped child or flag explicitly tagged board conflict");
+    require(rejected[1].reason=="conflicting board and hardware roles", "role conflict reason missing");
+  }
   Settings cfg;cfg.kerf=0;std::vector<Part>parts{{"a",60,40,10},{"b",60,40,10}};
   auto r=optimize(parts,{{"square",100,100}},cfg);require(r.exact&&r.sheets.size()==1,"two parts one sheet");
   parts={{"a",50,100,10},{"b",50,100,10}};r=optimize(parts,{{"square",100,100}},cfg);require(r.sheets.size()==1,"zero kerf exact fit");
@@ -109,6 +169,22 @@ int main(int argc,char**argv){try{
     require(detected,"missing finishing pass accepted for a thinner blade");
     bool tooWide=false;try{traceSawSequence(cc,sheets,5,&pp,5.1);}catch(const std::exception&){tooWide=true;}
     require(tooWide,"blade wider than allowance accepted");
+  }
+
+  // Scoring and emission must agree for every trim policy on a mixed tree
+  // with shared width, a kerf-dependent remainder, and extra stock at both edges.
+  {
+    std::vector<Part> blanks{{"first",50,30,12},{"second",50,40,12},{"third",35,75,12}};
+    auto tree=join(join(leaf(blanks[0],0),leaf(blanks[1],1),'H',5),leaf(blanks[2],2),'V',5);
+    std::vector<Sheet> sheets{{{"mixed",100,85},tree}};
+    for(int mode=0;mode<4;++mode){
+      std::vector<Placement> pp;std::vector<SawCut> cc;
+      shopLayout(tree,1,0,0,100,85,5,pp,cc,0,0,mode);
+      require((int)cc.size()==plannedCuts(tree,100,85,5,mode),"trim policy score differs from emitted cuts");
+      validate(pp,blanks,sheets,5);
+      labelSawSequence(cc,sheets,5,pp);
+      for(double actual:{0.0,2.5,5.0})traceSawSequence(cc,sheets,5,&pp,actual);
+    }
   }
 
   if(argc>1){

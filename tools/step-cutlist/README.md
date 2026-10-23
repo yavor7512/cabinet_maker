@@ -38,11 +38,15 @@ planes cannot be established, it rejects the part instead of guessing stock size
 Default sheet-like limits are 50.8 mm thickness and thickness/smaller-face-dimension
 ratio <=0.5. Use `--strict-rectangles` to restore the original full-box-only check.
 
-Parts whose leaf names contain the words screw, bolt, nut or washer are excluded
-from plywood quantities and listed explicitly in `excluded.csv`. This is a naming
-rule, not material identification. Unnamed hardware that fails board recognition
-remains unsupported and blocks a complete plan. Review exclusions for arbitrary
-third-party models. Named boards in the current complete cabinet are all retained:
+Board recognition uses geometry, independently of part names. The Drawer
+configuration distinguishes boards from hardware, and its STEP exporter carries
+those roles as `DrawerRole:Board` and `DrawerRole:Hardware` XCAF layers through
+merged files. Assembly roles apply to their descendants; a child explicitly
+tagged with the opposite role is rejected as a conflict. Explicitly tagged hardware is
+excluded from plywood quantities and listed in `excluded.csv`. A rectangular
+board named for its purpose, such as a screw tray, remains in the plan. An
+untyped solid that fails board recognition is unsupported and blocks a complete
+plan, even if its name says "screw". The current complete cabinet contains
 17 board blanks and 16 excluded pocket screws.
 
 `--skip-unsupported` still means a partial plan, but is not needed for the current
@@ -89,7 +93,7 @@ kerf separation. Internal slicing-tree dimensions are checked when emitting cuts
 - `inventory.csv`: one row per accepted physical part occurrence, with source path.
 - `quantities.csv`: aggregate rectangular sizes and quantities.
 - `rejected.csv`: every unsupported object and reason.
-- `excluded.csv`: named hardware intentionally excluded.
+- `excluded.csv`: hardware with an explicit role intentionally excluded.
 - `machining.csv`: boards requiring additional operations after blank cutting.
 - `report.txt`: thickness groups, stock usage, utilization and exact/heuristic status.
 - `thickness-N/placements.csv`: nominal part coordinates, inventory IDs and finished-piece references.

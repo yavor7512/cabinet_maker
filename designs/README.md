@@ -182,6 +182,16 @@ the optional alias and ordering fields:
 | `hardware` | Joints, axes, spacing and obstacles. |
 | `checks` | Expressions with minimum/maximum bounds and diagnostic messages. |
 
+The `boards` and `hardware` sections set each part's role. STEP exports carry
+that role as `DrawerRole:Board` or `DrawerRole:Hardware` layers, including through
+assembly merging. Display names do not determine a part's role.
+
+Pocket spacing is checked across every hardware group machining the same board,
+using the removed material inside that board. The gap must be strictly greater
+than the larger of the two profiles' `edge_clearance` values. Cached OpenCascade
+bounding boxes rule out distant pairs; remaining pairs use OpenCascade's exact
+minimum distance, including contact at the clearance limit.
+
 For each board/frame axis, provide either a size and exactly one alignment, or
 a `between` pair defining both size and position. All resolved coordinates are
 world coordinates; assembly membership does not add an implicit translation.

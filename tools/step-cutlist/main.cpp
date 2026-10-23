@@ -42,8 +42,8 @@ GEOMETRY
     Arbitrarily positioned/rotated closed rectangular solids are accepted.
     Smallest dimension is thickness. Names and repeated assembly instances are
     retained. Machined boards use stock blanks identified by six surviving
-    exterior datum planes. Machining is flagged separately. Named hardware
-    is excluded; unidentifiable solids are rejected. No machining toolpaths. STEP reader converts source units to millimetres.
+    exterior datum planes. Machining is flagged separately. Hardware with an
+    explicit STEP role is excluded; unidentifiable solids are rejected. No machining toolpaths. STEP reader converts source units to millimetres.
 OPTIMIZATION
     Groups by thickness. All inputs are assumed to be the SAME material species
     and grade; run separately for different materials. Grain cannot be inferred
@@ -64,7 +64,7 @@ OUTPUT
     With --export-details, the following are retained under details/:
     inventory.csv       Board blanks, dimensions and machining flags.
     machining.csv       Parts requiring work after rectangular blank cutting.
-    excluded.csv        Named screws/bolts/nuts/washers omitted from plywood.
+    excluded.csv        Parts with an explicit hardware role omitted from plywood.
     quantities.csv      Aggregated dimensions and quantities.
     rejected.csv        Unsupported objects and reasons (always written).
     report.txt          Stock usage, utilization and optimization status.
