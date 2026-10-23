@@ -2,7 +2,7 @@ local core = import 'project.libsonnet';
 {
   // Full-depth sides; ends fit between sides; bottom penetrates four dados.
   drawer(id, c):
-    assert core.fields(c, ['name', 'board_start', 'width', 'depth', 'height', 'at', 'wall', 'bottom', 'pocket', 'attachments']);
+    assert core.fields(c, ['name', 'filename', 'board_start', 'width', 'depth', 'height', 'at', 'wall', 'bottom', 'pocket', 'attachments']);
     assert core.fields(c.bottom, ['thickness', 'dado', 'offset', 'clearance']);
     assert core.fields(c.pocket, ['profile', 'count', 'lower', 'upper', 'angle']);
     assert std.length(c.at) == 3 : 'drawer.at needs [X, Y, Z]';
@@ -23,6 +23,7 @@ local core = import 'project.libsonnet';
       },
       assemblies: { [id]: {
         name: c.name,
+        filename: if std.objectHas(c, 'filename') then c.filename else id + '.step',
         part_order: [b(s) for s in ['left', 'right', 'front', 'back', 'bottom']] + ['@hardware'] +
                     (if std.objectHas(c, 'attachments') then c.attachments else []),
       } },

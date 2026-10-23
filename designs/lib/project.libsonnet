@@ -13,11 +13,12 @@ local unique(a, b, section) =
       : 'Unknown configuration field(s): ' + std.join(', ', std.setDiff(std.objectFields(value), std.sort(allowed)));
     true,
 
-  project(components, aliases={}):
+  project(components, aliases={}, order=null):
     local result = std.foldl(function(acc, component)
       assert self.fields(component, objectSections + arraySections);
       local c = empty + component;
       { [s]: unique(acc[s], c[s], s) for s in objectSections } +
       { [s]: acc[s] + c[s] for s in arraySections }, components, empty);
-    result + { schema_version: 1, parameter_aliases: aliases },
+    result + { schema_version: 1, parameter_aliases: aliases } +
+    (if order == null then {} else { assembly_order: order }),
 }

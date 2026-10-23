@@ -1,5 +1,6 @@
 #pragma once
 #include "expressions.hpp"
+#include "validation.hpp"
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
 #include <array>
@@ -64,7 +65,7 @@ struct Body {
   bool board=false;
   Box box;
 };
-struct Assembly { std::string id,name; };
+struct Assembly { std::string id,name,filename; };
 
 // Every position and dimension is a graph node. Named surfaces always refer to
 // the original rectangular blank, so machining cannot unexpectedly move a datum.
@@ -74,6 +75,7 @@ class Project {
   std::map<std::string,Body> bodies;
   std::vector<std::string> boardOrder;
   std::map<std::string,Assembly> assemblies;
+  std::vector<std::string> assemblyOrder;
   std::set<std::string> parameters;
   static constexpr const char* sizes[3] = {"width","depth","height"};
   static constexpr const char* anchors[3][3] = {{"left_x","center_x","right_x"},{"front_y","center_y","rear_y"},{"bottom_z","center_z","top_z"}};
@@ -130,7 +132,7 @@ public:
     document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(contents.data(),contents.size());
     if(document.HasParseError()) throw std::runtime_error(path.string()+": JSON error at byte "+std::to_string(document.GetErrorOffset())+": "+rapidjson::GetParseError_En(document.GetParseError()));
     uniqueKeys(document);
-    keys(document,{"schema_version","parameters","parameter_aliases","assemblies","frames","boards","cuts","hardware_profiles","hardware","checks"},"project");
+    keys(document,{"schema_version","parameters","parameter_aliases","assemblies","assembly_order","frames","boards","cuts","hardware_profiles","hardware","checks"},"project");
     auto& version=required(document,"schema_version","project");
     if(!version.IsInt() || version.GetInt()!=1) throw std::runtime_error("Unsupported project schema_version; expected 1");
     const auto& params=required(document,"parameters","project"); object(params,"parameters");
@@ -167,11 +169,28 @@ public:
     }
     for(const auto& override:overrides) if(!parameters.count(override.first)) throw std::runtime_error("Unknown parameter override: "+override.first);
     const auto& list=required(document,"assemblies","project"); object(list,"assemblies");
+    std::set<std::string> filenames;
     for(auto it=list.MemberBegin();it!=list.MemberEnd();++it) {
-      auto id=str(it->name,"assembly"); identifier(id,false); keys(it->value,{"name","part_order"},id);
-      assemblies.emplace(id,Assembly{id,str(required(it->value,"name",id),id)});
+      auto id=str(it->name,"assembly"); identifier(id,false); keys(it->value,{"name","part_order","filename"},id);
+      auto filename=it->value.HasMember("filename")?str(it->value["filename"],id+".filename"):id+".step";
+      if(filename.find_first_of("/\\")!=std::string::npos || std::filesystem::path(filename).extension()!=".step")
+        throw std::runtime_error(id+": filename must be a plain .step filename without directories");
+      auto folded=filename;
+      std::transform(folded.begin(),folded.end(),folded.begin(),[](unsigned char c){return std::tolower(c);});
+      if(!filenames.insert(folded).second) throw std::runtime_error("Duplicate assembly filename: "+filename);
+      assemblies.emplace(id,Assembly{id,str(required(it->value,"name",id),id),filename});
     }
     if(assemblies.empty()) throw std::runtime_error("Project requires at least one assembly");
+    if(document.HasMember("assembly_order")) {
+      const auto& order=document["assembly_order"]; array(order,"assembly_order");
+      std::set<std::string> seen;
+      for(const auto& entry:order.GetArray()) {
+        auto id=str(entry,"assembly_order");
+        if(!assemblies.count(id) || !seen.insert(id).second) throw std::runtime_error("assembly_order requires distinct configured assembly IDs: "+id);
+        assemblyOrder.push_back(id);
+      }
+      if(assemblyOrder.size()!=assemblies.size()) throw std::runtime_error("assembly_order must include every assembly exactly once");
+    } else for(const auto& entry:assemblies) assemblyOrder.push_back(entry.first);
     for(const auto& section:{"frames","boards"}) {
       if(!document.HasMember(section)) { if(std::string(section)=="boards") throw std::runtime_error("Project requires boards"); else continue; }
       const auto& list=document[section]; object(list,section);
@@ -184,7 +203,7 @@ public:
       for(int axis=0;axis<3;++axis) {
         body.box.low[axis]=graph.value(body.id+"."+anchors[axis][0]);
         body.box.size[axis]=graph.value(body.id+"."+sizes[axis]);
-        if(body.box.size[axis]<0.001 || body.box.size[axis]>1e6 || std::abs(body.box.low[axis])>1e6 || std::abs(body.box.high(axis))>1e6)
+        if(body.box.size[axis]<checks.minFeature || body.box.size[axis]>checks.maxDimension || std::abs(body.box.low[axis])>checks.maxDimension || std::abs(body.box.high(axis))>checks.maxDimension)
           throw std::runtime_error(body.id+": dimensions must be 0.001..1000000 mm and coordinates within +/-1000000 mm");
       }
       if(body.board) {
@@ -225,6 +244,7 @@ public:
     auto it=assemblies.find(id); if(it==assemblies.end()) throw std::runtime_error("Unknown assembly: "+id); return it->second;
   }
   const auto& boards() const { return boardOrder; }
+  const auto& assemblyIds() const { return assemblyOrder; }
   const Json& data() const { return document; }
 };
 }

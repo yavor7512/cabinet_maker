@@ -12,10 +12,12 @@ local drawer = {
 wood.project([
   wood.drawer('upper', drawer + {
     name: 'Upper inner drawer', board_start: 1,
+    filename: 'inner-drawer-477x523x102.step',
     height: 102, at: [0, 12, 619],
   }),
   wood.drawer('lower', drawer + {
     name: 'Lower pull-out tray with tall front', board_start: 6,
+    filename: 'tall-front-bottom-aligned.step',
     height: 203, at: [0, 12, 35],
     attachments: ['lower.face'],
   }),
@@ -32,6 +34,7 @@ wood.project([
   }),
   wood.carcass('carcass', {
     name: 'Cabinet carcass and face frame', board_start: 12,
+    filename: 'cabinet-carcass.step',
     frame: 'opening', opening: [494, 737], depth: 597, stock: 18,
     stile: [38, 18],
     at: ['lower_box.center_x - carcass_opening_width / 2', 3.5, 0],
@@ -42,4 +45,4 @@ wood.project([
     pocket_diameter: 7, seat_distance: 10.5,
     edge_clearance: 2, tip_clearance: 0.5,
   }),
-], aliases=makeAliases)
+], aliases=makeAliases, order=['carcass', 'upper', 'lower'])

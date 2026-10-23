@@ -16,6 +16,9 @@ Install Jsonnet alongside the existing build dependencies:
 ```sh
 brew install cmake opencascade rapidjson jsonnet
 make all
+make assemblies
+make carcass
+make assembly ASSEMBLY=lower
 make lower FACE_WIDTH_MM=469.9 FACE_HEIGHT_MM=711.2 LOWER_POSITION_Y_MM=12
 make packet PROJECT_FILE="/path/to/another cabinet.jsonnet"
 ```
@@ -44,9 +47,41 @@ build/drawer --project build/project.json --describe
 build/drawer --project build/project.json --describe --assembly lower
 ```
 
-The C++ CLI accepts expanded JSON, not Jsonnet directly. CMake builds a separate
+The C++ CLI requires expanded JSON; it has no built-in drawer/carcass model or
+standalone dimensional flags. CMake builds a separate
 `build/default-project.json` for tests from the production design. It tracks the
 cabinet file and every `.libsonnet` recipe as build dependencies.
+
+## Assembly selection and exports
+
+An assembly is a named group of boards and hardware in the configuration.
+`make assemblies` lists its ID, display name, board count and output filename.
+`make assembly ASSEMBLY=ID` generates that group; `ASSEMBLY_OUTPUT` can override
+the destination. `make upper`, `make lower` and `make carcass` select the matching
+configured IDs. `make carcase` is a spelling alias for `make carcass`.
+
+The drawer/carcass recipes accept an optional `filename`; otherwise they use
+`ID.step`. A raw assembly definition has the same optional field. Filenames must
+be unique plain `.step` filenames without directories. For example:
+
+```jsonnet
+wood.carcass('carcass', {
+  name: 'Cabinet carcass and face frame', filename: 'cabinet-carcass.step',
+  board_start: 12, frame: 'opening', opening: [494, 737],
+  depth: 597, stock: 18, stile: [38, 18], at: [0, 3.5, 0],
+})
+```
+
+Pass `order=['carcass', 'upper', 'lower']` to `wood.project` to specify generation
+and merge order. It must include every assembly exactly once; omission defaults
+to alphabetical IDs. The production order preserves existing part IDs and PDF
+layout. `make models`, `make merged`, `make autocad` and `make all` discover the
+assemblies and filenames from the selected configuration. Adding an assembly
+requires no C++ or Makefile change; if the project has an explicit order, add its
+ID there too. Cabinet shortcuts still require their corresponding IDs to exist.
+
+See `tests/standalone.jsonnet` for an unrelated one-board shelf that works with
+the same engine and Makefile, including full STEP/PDF generation.
 
 ## Reuse and construction changes
 
@@ -58,7 +93,7 @@ cabinet file and every `.libsonnet` recipe as build dependencies.
 | `panel(id, settings)` | One board with independently specified size and axis alignments; optional projected overlap checks. |
 | `carcass(id, settings)` | Full-height sides outside the opening, caps between sides and two full-height stiles. |
 | `pocketScrew(id, settings)` | Reusable screw/pocket dimensions and clearances. |
-| `project(components, aliases={})` | Combines instances into an expanded project and rejects duplicate names. |
+| `project(components, aliases={}, order=null)` | Combines instances, rejects duplicate names and optionally sets assembly order. |
 
 The actual relationships live in `lib/drawer.libsonnet` and
 `lib/carcass.libsonnet`. For example, the drawer front spans the inside faces
@@ -138,7 +173,8 @@ the optional alias and ordering fields:
 | --- | --- |
 | `parameters` | Numeric values and deferred expressions. |
 | `parameter_aliases` | Optional alias → array of declared parameter names. Explicit overrides fan out; targets cannot belong to multiple aliases. |
-| `assemblies` | Names and optional `part_order` arrays of board IDs and `@hardware`. |
+| `assemblies` | Names, optional export `filename`, and optional `part_order` arrays of board IDs and `@hardware`. |
+| `assembly_order` | Optional ordered list of every assembly ID, used for generation and merging. |
 | `frames` | Nonphysical reference boxes. |
 | `boards` | Assembly, name, board number, size and placement. |
 | `cuts` | Named rectangular cutters, targets and per-axis clearances. |

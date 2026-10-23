@@ -35,6 +35,8 @@ SKIP_BUILD ?= 0
 PROJECT_FILE ?= $(ROOT)/designs/cabinet.jsonnet
 EXPANDED_PROJECT := $(BUILD_DIR)/project.json
 PROJECT_OPTIONS ?=
+ASSEMBLY ?=
+ASSEMBLY_OUTPUT ?=
 PROJECT_VARIABLES := WALL_THICKNESS_MM BOTTOM_THICKNESS_MM DADO_DEPTH_MM BOTTOM_OFFSET_MM DADO_CLEARANCE_MM \
  BOX_WIDTH_MM BOX_DEPTH_MM UPPER_HEIGHT_MM LOWER_HEIGHT_MM \
  LOWER_POSITION_X_MM LOWER_POSITION_Y_MM LOWER_POSITION_Z_MM \
@@ -68,12 +70,10 @@ SHOP_ATTEMPTS ?= 64
 COLOR ?= \#A8793E
 PACKET_OPTIONS ?=
 
-# Stable filenames preserve existing CAD import references, even with size overrides.
-UPPER_STEP = $(OUTPUT_DIR)/inner-drawer-477x523x102.step
-LOWER_STEP = $(OUTPUT_DIR)/tall-front-bottom-aligned.step
-CARCASS_STEP = $(OUTPUT_DIR)/cabinet-carcass.step
-MODEL_INPUTS = "$(CARCASS_STEP)" "$(UPPER_STEP)" "$(LOWER_STEP)"
-.PHONY: all build drawer-build merge-build cutlist-build models upper lower carcass merged autocad packet
+# Export filenames and merge order come from the selected configuration.
+ASSEMBLY_DESTINATION = $(if $(ASSEMBLY_OUTPUT),--output "$(ASSEMBLY_OUTPUT)",--output-dir "$(OUTPUT_DIR)")
+.PHONY: all build drawer-build merge-build cutlist-build models upper lower carcass carcase merged autocad packet
+.PHONY: assemblies assembly
 .PHONY: project test drawer-test cutlist-test merge-test regression-test test-make clean help
 all: packet autocad
 build: drawer-build merge-build cutlist-build
@@ -102,23 +102,38 @@ endif
 
 # Intentional phony generation: changing any setting always refreshes geometry.
 # CMake still rebuilds C++ incrementally. Prerequisites make `make -j` safe.
-models: upper lower carcass
+models: project
+	"$(DRAWER_BIN)" $(PROJECT_ARGS) --all --output-dir "$(OUTPUT_DIR)"
 project: drawer-build
 	"$(CMAKE)" -DINPUT="$(PROJECT_FILE)" -DOUTPUT="$(EXPANDED_PROJECT)" \
 	 -DJSONNET_EXECUTABLE="$(JSONNET)" -P "$(ROOT)/cmake/ExpandProject.cmake"
+assemblies: project
+	"$(DRAWER_BIN)" $(PROJECT_ARGS) --list-assemblies
+assembly: project
+	@test -n "$(ASSEMBLY)" || { printf '%s\n' 'Set ASSEMBLY to a configured ID; use make assemblies to list them.' >&2; exit 1; }
+	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly "$(ASSEMBLY)" $(ASSEMBLY_DESTINATION)
+# Cabinet shortcuts select configured assemblies and preserve CAD import filenames.
 upper: project
 	@mkdir -p "$(OUTPUT_DIR)"
-	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly upper --output "$(UPPER_STEP)"
+	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly upper --output-dir "$(OUTPUT_DIR)"
 lower: project
 	@mkdir -p "$(OUTPUT_DIR)"
-	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly lower --output "$(LOWER_STEP)"
+	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly lower --output-dir "$(OUTPUT_DIR)"
 carcass: project
 	@mkdir -p "$(OUTPUT_DIR)"
-	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly carcass --output "$(CARCASS_STEP)"
+	"$(DRAWER_BIN)" $(PROJECT_ARGS) --assembly carcass --output-dir "$(OUTPUT_DIR)"
+carcase: carcass
+# Capture the list before merging so a failed query cannot produce a partial merge.
+define merge_assemblies
+	@set -euo pipefail; \
+	 outputs=$$("$(DRAWER_BIN)" $(PROJECT_ARGS) --list-outputs --output-dir "$(OUTPUT_DIR)"); \
+	 inputs=(); while IFS= read -r file; do inputs+=("$$file"); done <<< "$$outputs"; \
+	 "$(MERGE_BIN)" --force $(1) --color '$(COLOR)' --output "$(OUTPUT_DIR)/$(2)" "$${inputs[@]}"
+endef
 merged: models merge-build
-	"$(MERGE_BIN)" --force --color '$(COLOR)' --output "$(OUTPUT_DIR)/complete-cabinet.step" $(MODEL_INPUTS)
+	$(call merge_assemblies,,complete-cabinet.step)
 autocad: models merge-build
-	"$(MERGE_BIN)" --force --autocad --color '$(COLOR)' --output "$(OUTPUT_DIR)/complete-cabinet-autocad.step" $(MODEL_INPUTS)
+	$(call merge_assemblies,--autocad,complete-cabinet-autocad.step)
 packet: merged cutlist-build
 	@set -euo pipefail; \
 	 tmp=$$(mktemp -d "$(OUTPUT_DIR)/.packet.XXXXXX"); \
@@ -139,15 +154,11 @@ drawer-test: drawer-build
 	"$(CTEST)" --test-dir "$(BUILD_DIR)" --output-on-failure --no-tests=error
 cutlist-test: cutlist-build
 	"$(CTEST)" --test-dir "$(CUTLIST_BUILD_DIR)" --output-on-failure --no-tests=error
-merge-test: drawer-build merge-build
-	@set -euo pipefail; \
-	 tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/drawer-merge-test.XXXXXX"); \
-	 trap 'rm -rf "$$tmp"' EXIT; \
-	 "$(DRAWER_BIN)" --model carcass --output "$$tmp/input.step" > "$$tmp/generate.log"; \
-	 bash "$(ROOT)/tools/step-merge/test.sh" "$(MERGE_BIN)" "$$tmp/input.step"
+merge-test: merge-build
+	bash "$(ROOT)/tools/step-merge/test.sh" "$(MERGE_BIN)" "$(ROOT)/tests/fixtures/pre-config/cabinet-carcass.step"
 
 # Fixed artifacts captured before the first configuration refactor, independent
-# of both current construction recipes and the legacy C++ generator.
+# of current construction recipes and the geometry engine.
 regression-test: build
 	"$(CMAKE)" -DDRAWER="$(DRAWER_BIN)" -DCOMPARE="$(BUILD_DIR)/project_tests" \
 	 -DMERGE="$(MERGE_BIN)" -DCUTLIST="$(CUTLIST_BIN)" -DJSONNET_EXECUTABLE="$(JSONNET)" \
@@ -167,12 +178,16 @@ clean:
 
 help:
 	@printf '%s\n' \
-	 'make / make all   Build tools, generate three models, merged STEP, AutoCAD STEP and PDF.' \
+	 'make / make all   Build tools, generate configured assemblies, merged STEP, AutoCAD STEP and PDF.' \
 	 'make upper        Build the drawer tool and generate only the upper inner drawer.' \
 	 'make lower        Build the drawer tool and generate only the tall-front lower drawer.' \
 	 'make carcass      Build the drawer tool and generate only the carcass.' \
-	 'make models       Build the drawer tool and generate all three assemblies.' \
-	 'make merged       Generate the three models and merge them into complete-cabinet.step.' \
+	 'make carcase      Alias for make carcass.' \
+	 'make assemblies   List the assembly IDs and names in PROJECT_FILE.' \
+	 'make assembly ASSEMBLY=ID   Generate one assembly using its configured filename.' \
+	 'ASSEMBLY_OUTPUT=/path/to/file.step overrides the generic assembly output filename.' \
+	 'make models       Build the drawer tool and generate every configured assembly.' \
+	 'make merged       Generate the configured assemblies and merge them into complete-cabinet.step.' \
 	 'make packet       Generate models, merged STEP and shop-packet.pdf.' \
 	 'make autocad      Generate models and the rotated AutoCAD export.' \
 	 'make build        Configure/build all three C++ tools; no production outputs.' \

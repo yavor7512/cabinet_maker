@@ -188,10 +188,9 @@ inline void exportProject(Project& project,const std::string& assembly,const std
   if(output.empty()) throw std::runtime_error("Output path cannot be empty");
   auto generated=generate(project,assembly);
   auto expected=solidVolumes(compound(generated.parts));
-  exportSettings.assemblyName=project.assembly(assembly).name;
   if(output.has_parent_path()) std::filesystem::create_directories(output.parent_path());
-  auto imported=writeNamedAssembly(output,generated.parts,generated.names);
-  verifyHardware(imported,expected,generated.parts.size());
+  auto imported=writeNamedAssembly(output,generated.parts,generated.names,project.assembly(assembly).name);
+  verifySolidVolumes(imported,expected,generated.parts.size());
   std::cout<<"Saved and verified project assembly '"<<assembly<<"': "<<std::filesystem::absolute(output)<<"\n";
 }
 }

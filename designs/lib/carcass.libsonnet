@@ -2,7 +2,7 @@ local core = import 'project.libsonnet';
 {
   // Full-height sides outside the opening; caps fit between them; two stiles.
   carcass(id, c):
-    assert core.fields(c, ['name', 'board_start', 'frame', 'opening', 'depth', 'stock', 'stile', 'at']);
+    assert core.fields(c, ['name', 'filename', 'board_start', 'frame', 'opening', 'depth', 'stock', 'stile', 'at']);
     assert std.length(c.at) == 3 && std.length(c.opening) == 2 && std.length(c.stile) == 2 : 'Invalid carcass dimensions';
     local p = id + '_';
     local f = c.frame;
@@ -15,7 +15,7 @@ local core = import 'project.libsonnet';
         [p + 'stile_width']: c.stile[0], [p + 'stile_thickness']: c.stile[1],
         [p + 'x']: c.at[0], [p + 'y']: c.at[1], [p + 'z']: c.at[2], [p + 'board_start']: c.board_start,
       },
-      assemblies: { [id]: { name: c.name } },
+      assemblies: { [id]: { name: c.name, filename: if std.objectHas(c, 'filename') then c.filename else id + '.step' } },
       frames: { [f]: {
         size: { x: p + 'opening_width', y: p + 'depth', z: p + 'opening_height' },
         align: { left_x: p + 'x', front_y: p + 'y', bottom_z: p + 'z' },

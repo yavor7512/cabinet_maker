@@ -7,25 +7,13 @@
 #include <TDataStd_Name.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <set>
+#include <sstream>
+#include <iomanip>
 
 inline std::string numbered(const char* prefix, int number, const std::string& description) {
   std::ostringstream out;
   out << prefix << std::setfill('0') << std::setw(2) << number << " - " << description;
   return out.str();
-}
-inline std::vector<std::string> partNames(const Hardware& h, const DrawerFace& face) {
-  const int first = static_cast<int>(exportSettings.boardStart);
-  std::vector<std::string> names;
-  const std::vector<std::string> boards{"Left side", "Right side", "Front wall", "Back wall", "Bottom panel"};
-  for (std::size_t i=0;i<boards.size();++i)
-    names.push_back(numbered("B", first+static_cast<int>(i), boards[i]));
-  int screwNumber=1;
-  for (const std::string end : {"Front", "Back"})
-    for (const std::string side : {"left", "right"})
-      for (int i=0;i<static_cast<int>(h.count);++i)
-        names.push_back(numbered("S",screwNumber++,end+" "+side+" pocket screw "+std::to_string(i+1)));
-  if (face.enabled) names.push_back(numbered("B",first+static_cast<int>(boards.size()),"Applied drawer face"));
-  return names;
 }
 inline std::string labelName(const TDF_Label& label) {
   Handle(TDataStd_Name) attribute;
@@ -38,17 +26,17 @@ inline std::string labelName(const TDF_Label& label) {
 }
 inline TopoDS_Shape writeNamedAssembly(const std::filesystem::path& output,
                                       const std::vector<TopoDS_Shape>& parts,
-                                      const std::vector<std::string>& names) {
+                                      const std::vector<std::string>& names,
+                                      const std::string& assemblyName) {
   if (parts.size()!=names.size()) throw std::runtime_error("Part/name count mismatch");
-  const std::string assemblyName = exportSettings.assemblyName.empty()
-    ? output.stem().string() : exportSettings.assemblyName;
+  if (assemblyName.empty()) throw std::runtime_error("Assembly name cannot be empty");
   Handle(TDocStd_Document) doc = new TDocStd_Document("BinXCAF");
   auto tool = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
   const TDF_Label root = tool->NewShape();
   TDataStd_Name::Set(root,TCollection_ExtendedString(assemblyName.c_str(),true));
   for (std::size_t i=0;i<parts.size();++i) {
     // Strip incidental compound wrappers left by Boolean cuts so each part
-    // imports as a solid beneath the one drawer assembly.
+    // imports as a solid beneath the selected assembly.
     TopExp_Explorer it(parts[i],TopAbs_SOLID);
     if (!it.More()) throw std::runtime_error("Named part has no solid");
     const TopoDS_Shape solid=it.Current();
@@ -76,7 +64,7 @@ inline TopoDS_Shape writeNamedAssembly(const std::filesystem::path& output,
   TDF_LabelSequence roots;
   importedTool->GetFreeShapes(roots);
   if (roots.Length()!=1 || !XCAFDoc_ShapeTool::IsAssembly(roots.Value(1)))
-    throw std::runtime_error("STEP must contain one root drawer assembly");
+    throw std::runtime_error("STEP must contain one root assembly");
   if (labelName(roots.Value(1))!=assemblyName)
     throw std::runtime_error("STEP assembly name did not survive export");
   TDF_LabelSequence components;

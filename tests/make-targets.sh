@@ -25,7 +25,7 @@ expect_failure() {
   if invoke "$@" > "$log" 2>&1; then fail "Unexpected success: $*"; fi
 }
 
-for target in help clean all lower upper carcass models merged autocad packet \
+for target in help clean all lower upper carcass carcase assemblies assembly models merged autocad packet \
               project build drawer-build merge-build cutlist-build test drawer-test cutlist-test merge-test regression-test; do
   case_dir="$work/$target case"
   mkdir -p "$case_dir"
@@ -36,11 +36,12 @@ for target in help clean all lower upper carcass models merged autocad packet \
   case "$target" in
     all) args=(-j3 all FACE_WIDTH_MM=469.9 FACE_HEIGHT_MM=711.2) ;;
     lower) args=(lower FACE_WIDTH_MM=469.9 FACE_HEIGHT_MM=711.2 LOWER_POSITION_Y_MM=12) ;;
+    assembly) args=(assembly ASSEMBLY=carcass) ;;
   esac
   invoke "${args[@]}" > "$log" 2>&1 || fail "$target from empty folders"
   out="$case_dir/generated output"
   case "$target" in
-    all|lower|upper|carcass|models|merged|autocad|packet|project|build|drawer-build|test|drawer-test|merge-test|regression-test)
+    all|lower|upper|carcass|carcase|assemblies|assembly|models|merged|autocad|packet|project|build|drawer-build|test|drawer-test|regression-test)
       require_file "$case_dir/drawer build/drawer" ;;
   esac
   case "$target" in
@@ -67,11 +68,11 @@ for target in help clean all lower upper carcass models merged autocad packet \
       require_file "$out/cabinet-carcass.step" ;;
     lower) require_file "$out/tall-front-bottom-aligned.step" ;;
     upper) require_file "$out/inner-drawer-477x523x102.step" ;;
-    carcass) require_file "$out/cabinet-carcass.step" ;;
+    carcass|carcase|assembly) require_file "$out/cabinet-carcass.step" ;;
     *) [[ ! -e "$out" ]] || fail "$target wrote production outputs" ;;
   esac
   case "$target" in
-    lower|upper|carcass|models|project|drawer-build|drawer-test)
+    lower|upper|carcass|carcase|assemblies|assembly|models|project|drawer-build|drawer-test)
       [[ ! -e "$case_dir/merge build" && ! -e "$case_dir/cutlist build" ]] || fail "$target built unrelated tools" ;;
   esac
   printf 'PASS: %s from empty folders\n' "$target"
@@ -103,6 +104,28 @@ printf 'PASS: JSON/Jsonnet paths, imports and overrides; failed expansion preser
 expect_failure packet SKIP_BUILD=1 CUTLIST_BIN=/usr/bin/false
 [[ $(cksum < "$pdf") == "$before" ]] || fail 'Failed planner replaced the existing PDF'
 printf 'PASS: failed planning preserves the existing PDF and returns failure\n'
+
+# A new assembly and filename are discovered from configuration alone. Full
+# generation/merging must not depend on the production upper/lower/carcass IDs.
+standalone="$root/tests/standalone.jsonnet"
+invoke all SKIP_BUILD=1 "PROJECT_FILE=$standalone" "OUTPUT_DIR=$case_dir/standalone output" > "$log" 2>&1 || fail 'Generic full project generation'
+require_file "$case_dir/standalone output/display shelf.step"
+require_file "$case_dir/standalone output/complete-cabinet.step"
+require_file "$case_dir/standalone output/complete-cabinet-autocad.step"
+require_file "$case_dir/standalone output/cabinet-shop-packet/shop-packet.pdf"
+[[ ! -e "$case_dir/standalone output/cabinet-carcass.step" ]] || fail 'Generic generation created a built-in carcass'
+invoke assembly SKIP_BUILD=1 "PROJECT_FILE=$standalone" ASSEMBLY=shelf \
+  "ASSEMBLY_OUTPUT=$case_dir/single shelf.step" > "$log" 2>&1 || fail 'Generic assembly and explicit filename'
+require_file "$case_dir/single shelf.step"
+invoke assemblies SKIP_BUILD=1 "PROJECT_FILE=$standalone" > "$log" 2>&1 || fail 'Generic assembly discovery'
+[[ $(cat "$log") == *'Étagère shelf'* ]] || fail 'Configured assembly was not listed'
+# The failed packet command above regenerated model files before planning
+# failed, so snapshot the current STEP immediately before testing preservation.
+step_before=$(cksum < "$case_dir/generated output/tall-front-bottom-aligned.step")
+expect_failure assembly SKIP_BUILD=1
+expect_failure assembly SKIP_BUILD=1 ASSEMBLY=missing "ASSEMBLY_OUTPUT=$case_dir/generated output/tall-front-bottom-aligned.step"
+[[ $(cksum < "$case_dir/generated output/tall-front-bottom-aligned.step") == "$step_before" ]] || fail 'Invalid assembly selection replaced STEP'
+printf 'PASS: configuration-only discovery, selection, filenames and full-project generation\n'
 
 mkdir -p "$case_dir/unrecognized" "$case_dir/generated output/archive"
 printf 'preserve me\n' > "$case_dir/unrecognized/sentinel"

@@ -3,7 +3,7 @@
 The three component STEP files and `shop-packet.pdf` were copied unchanged from
 `/tmp/drawer-project-baseline`, the backup made on 2026-10-22 **before** the first
 `cabinet.json` refactor. They are not generated from the current configuration or
-current legacy C++ implementation during tests.
+geometry engine during tests.
 
 The two `complete-cabinet*.step` fixtures were assembled once from those original
 component files using the unchanged STEP merger, brown `#A8793E`, the original

@@ -77,6 +77,8 @@ int main(int argc,char** argv) {
     const std::filesystem::path source=argv[1],dir=argv[2];
     std::filesystem::create_directories(dir);
     Project initial(source);
+    require(initial.assemblyIds()==std::vector<std::string>({"carcass","upper","lower"}),"Configured merge order changed");
+    require(initial.assembly("lower").filename=="tall-front-bottom-aligned.step","Configured filename changed");
     require(initial.boards().size()==17,"Expected 17 boards");
     near(initial.body("lower.face").box.low[2],9.8,"Initial face bottom");
     near(initial.body("lower.face").box.high(2),721,"Initial face top");
@@ -116,6 +118,13 @@ int main(int argc,char** argv) {
       auto path=dir/(name+".json"); std::ofstream(path)<<buffer.GetString(); return path;
     };
     auto set=[](rapidjson::Document& doc,Json& value,const char* text){value.SetString(text,doc.GetAllocator());};
+    auto unnamed=mutate("default-export-names",[](rapidjson::Document& doc) {
+      doc.RemoveMember("assembly_order");
+      for(auto& entry:doc["assemblies"].GetObject()) entry.value.RemoveMember("filename");
+    });
+    Project defaultExports(unnamed);
+    require(defaultExports.assemblyIds()==std::vector<std::string>({"carcass","lower","upper"}),"Default assembly order must be alphabetical");
+    require(defaultExports.assembly("lower").filename=="lower.step","Default filename must follow the configured ID");
     auto independent=mutate("independent-instance-defaults",[](rapidjson::Document& doc) {
       doc["parameters"]["lower_width"].SetInt(480);
     });
@@ -157,6 +166,11 @@ int main(int argc,char** argv) {
       throw std::runtime_error("Accepted invalid project; expected "+expected);
     };
     rejects("Unknown parameter",[&]{Project bad(source,{{"TYPO","42"}});});
+    rejects("plain .step filename",[&]{auto path=mutate("outside-output",[&](rapidjson::Document& doc){set(doc,doc["assemblies"]["lower"]["filename"],"../outside.step");});Project bad(path);});
+    rejects("Duplicate assembly filename",[&]{auto path=mutate("duplicate-output",[&](rapidjson::Document& doc){set(doc,doc["assemblies"]["lower"]["filename"],"CABINET-CARCASS.step");});Project bad(path);});
+    rejects("distinct configured assembly IDs",[&]{auto path=mutate("unknown-export",[&](rapidjson::Document& doc){set(doc,doc["assembly_order"][0],"missing");});Project bad(path);});
+    rejects("distinct configured assembly IDs",[&]{auto path=mutate("duplicate-export",[&](rapidjson::Document& doc){set(doc,doc["assembly_order"][0],"lower");});Project bad(path);});
+    rejects("include every assembly",[&]{auto path=mutate("omitted-export",[](rapidjson::Document& doc){doc["assembly_order"].PopBack();});Project bad(path);});
     rejects("Unknown parameter alias target",[&]{auto path=mutate("bad-alias",[&](rapidjson::Document& doc){set(doc,doc["parameter_aliases"]["BOX_WIDTH_MM"][0],"missing");});Project bad(path);});
     rejects("Duplicate parameter alias target",[&]{auto path=mutate("duplicate-alias",[&](rapidjson::Document& doc){set(doc,doc["parameter_aliases"]["BOX_WIDTH_MM"][1],"upper_width");});Project bad(path);});
     rejects("requires at least one target",[&]{auto path=mutate("empty-alias",[](rapidjson::Document& doc){doc["parameter_aliases"]["BOX_WIDTH_MM"].Clear();});Project bad(path);});

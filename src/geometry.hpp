@@ -23,6 +23,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "settings.hpp"
-#include "hardware.hpp"
+#include "validation.hpp"
+#include "shape_utils.hpp"
 #include "step_export.hpp"
